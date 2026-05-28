@@ -38,6 +38,7 @@
     "./maintenance": "./lib/maintenance.js",
     "./branding/config": "./lib/branding/config.js",
     "./branding/provider": "./lib/branding/provider.js",
+    "./status/config": "./lib/status/config.js",
     "./package.json": "./package.json"
   },
   "files": [
