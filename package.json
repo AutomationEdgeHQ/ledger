@@ -13,6 +13,8 @@
     "./instrumentation": "./config/instrumentation.js",
     "./auth": "./lib/auth/index.js",
     "./auth/actions": "./lib/auth/actions.js",
+    "./auth/mfa-actions": "./lib/auth/mfa-actions.js",
+    "./auth/password-reset-actions": "./lib/auth/password-reset-actions.js",
     "./chat/api": "./lib/chat/api.js",
     "./db": "./lib/db/index.js",
     "./db/chats": "./lib/db/chats.js",
