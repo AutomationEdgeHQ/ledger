@@ -62,6 +62,8 @@ Commands:
   sync --fast <path>                Fast sync — copy source into running container, rebuild .next
   set-var <KEY> [VALUE]             Set a GitHub repository variable
   user:password <email>             Change a user's password
+  user:password-reset <email>       Generate a temp password for break-glass recovery
+  user:mfa-reset <email>            Clear MFA on a user (break-glass recovery)
 `);
 }
 
@@ -1067,6 +1069,71 @@ async function userPassword(email) {
   }
 }
 
+async function userPasswordReset(email) {
+  if (!email) {
+    console.error('\n  Usage: thepopebot user:password-reset <email>\n');
+    process.exit(1);
+  }
+
+  const { confirm, isCancel } = await import('@clack/prompts');
+  const proceed = await confirm({
+    message: `Generate a temporary password for ${email}? They will need to change it after signing in.`,
+    initialValue: false,
+  });
+  if (isCancel(proceed) || !proceed) {
+    console.log('\nCancelled.\n');
+    process.exit(0);
+  }
+
+  const { randomBytes } = await import('crypto');
+  const tempPassword = randomBytes(12).toString('base64url');
+
+  const { initDatabase } = await import('../lib/db/index.js');
+  initDatabase();
+  const { updateUserPassword } = await import('../lib/db/users.js');
+  const updated = updateUserPassword(email, tempPassword);
+  if (!updated) {
+    console.error(`\n  No user found with email: ${email}\n`);
+    process.exit(1);
+  }
+  console.log(`\n  Temporary password for ${email}:\n`);
+  console.log(`    ${tempPassword}\n`);
+  console.log('  Share this with the user over a secure channel. They should sign in and change it immediately.\n');
+}
+
+async function userMfaReset(email) {
+  if (!email) {
+    console.error('\n  Usage: thepopebot user:mfa-reset <email>\n');
+    process.exit(1);
+  }
+
+  const { confirm, isCancel } = await import('@clack/prompts');
+  const proceed = await confirm({
+    message: `Clear all MFA state for ${email}? They will need to re-enroll from their profile.`,
+    initialValue: false,
+  });
+  if (isCancel(proceed) || !proceed) {
+    console.log('\nCancelled.\n');
+    process.exit(0);
+  }
+
+  const { initDatabase } = await import('../lib/db/index.js');
+  initDatabase();
+  const { getUserByEmail, disableUserMfa } = await import('../lib/db/users.js');
+  const user = getUserByEmail(email);
+  if (!user) {
+    console.error(`\n  No user found with email: ${email}\n`);
+    process.exit(1);
+  }
+  const ok = disableUserMfa(user.id);
+  if (ok) {
+    console.log(`\n  MFA cleared for ${email}. Tell them to enroll again from /profile/login.\n`);
+  } else {
+    console.error(`\n  Could not clear MFA for ${email}.\n`);
+    process.exit(1);
+  }
+}
+
 switch (command) {
   case 'init':
     await init();
@@ -1113,6 +1180,12 @@ switch (command) {
     break;
   case 'user:password':
     await userPassword(args[0]);
+    break;
+  case 'user:password-reset':
+    await userPasswordReset(args[0]);
+    break;
+  case 'user:mfa-reset':
+    await userMfaReset(args[0]);
     break;
   default:
     printUsage();

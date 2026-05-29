@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { UserIcon, PlusIcon, TrashIcon } from './icons.js';
 import { Dialog, EmptyState, formatDate } from './settings-shared.js';
-import { getUsers, addUser, editUser, removeUser, resetPassword } from '../../auth/actions.js';
+import { getUsers, addUser, editUser, removeUser, resetPassword, adminDisableMfa } from '../../auth/actions.js';
 
 function EditUserDialog({ open, user, onSave, onCancel }) {
   const [email, setEmail] = useState('');
@@ -200,6 +200,23 @@ export function SettingsUsersPage() {
     setConfirmDelete(null);
   };
 
+  const [confirmMfaDisable, setConfirmMfaDisable] = useState(null);
+  const handleDisableMfa = async (id) => {
+    if (confirmMfaDisable !== id) {
+      setConfirmMfaDisable(id);
+      setTimeout(() => setConfirmMfaDisable(null), 3000);
+      return;
+    }
+    setError(null);
+    const result = await adminDisableMfa(id);
+    if (result.error) {
+      setError(result.error);
+    } else {
+      setUsers((prev) => prev.map((u) => u.id === id ? { ...u, mfaEnabled: 0 } : u));
+    }
+    setConfirmMfaDisable(null);
+  };
+
   const handleEditSave = async () => {
     setEditingUser(null);
     await loadUsers();
@@ -324,6 +341,18 @@ export function SettingsUsersPage() {
                   >
                     Reset password
                   </button>
+                  {u.mfaEnabled === 1 && (
+                    <button
+                      onClick={() => handleDisableMfa(u.id)}
+                      className={`rounded-md px-2.5 py-1.5 text-xs font-medium border transition-colors ${
+                        confirmMfaDisable === u.id
+                          ? 'border-destructive text-destructive hover:bg-destructive/10'
+                          : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                      }`}
+                    >
+                      {confirmMfaDisable === u.id ? 'Confirm disable MFA' : 'Disable MFA'}
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDelete(u.id)}
                     className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium border shrink-0 transition-colors ${
