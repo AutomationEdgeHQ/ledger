@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from './ui/button';
@@ -8,7 +9,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 
-export function LoginForm() {
+export function LoginForm({ passwordResetAvailable = false }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const justCreated = searchParams.get('created') === '1';
@@ -84,6 +85,14 @@ export function LoginForm() {
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? 'Signing in...' : 'Sign In'}
           </Button>
+          {passwordResetAvailable && (
+            <Link
+              href="/forgot-password"
+              className="block text-center text-sm text-muted-foreground hover:text-foreground"
+            >
+              Forgot your password?
+            </Link>
+          )}
         </form>
       </CardContent>
     </Card>
