@@ -57,6 +57,8 @@ const EVENT_HANDLER_TABS = [
   { id: 'telegram', label: 'Telegram', href: '/admin/event-handler/telegram' },
   { id: 'slack', label: 'Slack', href: '/admin/event-handler/slack' },
   { id: 'teams', label: 'Teams', href: '/admin/event-handler/teams' },
+  { id: 'google', label: 'Google', href: '/admin/event-handler/google' },
+  { id: 'microsoft', label: 'Microsoft', href: '/admin/event-handler/microsoft' },
   { id: 'voice', label: 'Voice', href: '/admin/event-handler/voice' },
 ];
 

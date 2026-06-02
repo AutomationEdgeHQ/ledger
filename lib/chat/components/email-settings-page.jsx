@@ -1,0 +1,417 @@
+'use client';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { CopyIcon, CheckIcon, TrashIcon, StarIcon, StarFilledIcon, SpinnerIcon } from './icons.js';
+import { StatusBadge } from './settings-shared.js';
+import {
+  getEmailProviderStatus,
+  getMyEmailAccounts,
+  initiateEmailAccountLink,
+  unlinkEmailAccount,
+  setDefaultEmailAccount,
+  setEmailAccountStatus,
+  getEmailAppConfig,
+  updateApiKeySetting,
+} from '../actions.js';
+
+const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft' };
+
+const inputClass =
+  'w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground';
+
+function Banner({ message }) {
+  if (!message) return null;
+  return (
+    <div
+      className={`rounded-lg border p-3 text-sm ${
+        message.type === 'error'
+          ? 'border-destructive/30 bg-destructive/5 text-destructive'
+          : 'border-green-500/30 bg-green-500/5 text-green-500'
+      }`}
+    >
+      {message.text}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Profile › Email — per-user mailbox linking (multi-account)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function ProfileEmailPage() {
+  const [providers, setProviders] = useState({ google: false, microsoft: false });
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [connecting, setConnecting] = useState(null); // provider id while popup open
+  const [error, setError] = useState(null);
+  const [confirmUnlink, setConfirmUnlink] = useState(null);
+  const popupRef = useRef(null);
+
+  const reloadAccounts = useCallback(async () => {
+    const list = await getMyEmailAccounts();
+    setAccounts(Array.isArray(list) ? list : []);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [status, list] = await Promise.all([getEmailProviderStatus(), getMyEmailAccounts()]);
+        setProviders(status || { google: false, microsoft: false });
+        setAccounts(Array.isArray(list) ? list : []);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // Receive the popup's postMessage result (same pattern as the agent-secret OAuth flow).
+  const handleMessage = useCallback(
+    (event) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (data?.type === 'oauth-success') {
+        setConnecting(null);
+        reloadAccounts();
+      } else if (data?.type === 'oauth-error') {
+        setConnecting(null);
+        setError(data.detail || 'Authorization failed.');
+      }
+    },
+    [reloadAccounts]
+  );
+
+  useEffect(() => {
+    if (!connecting) return;
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [connecting, handleMessage]);
+
+  const handleConnect = async (provider) => {
+    setError(null);
+    setConnecting(provider);
+    const result = await initiateEmailAccountLink({ provider });
+    if (result?.error) {
+      setError(result.error);
+      setConnecting(null);
+      return;
+    }
+    popupRef.current = window.open(result.url, 'oauth-popup', 'width=600,height=700');
+  };
+
+  const handleUnlink = async (id) => {
+    if (confirmUnlink !== id) {
+      setConfirmUnlink(id);
+      setTimeout(() => setConfirmUnlink((c) => (c === id ? null : c)), 3000);
+      return;
+    }
+    setConfirmUnlink(null);
+    await unlinkEmailAccount(id);
+    await reloadAccounts();
+  };
+
+  const handleSetDefault = async (id) => {
+    await setDefaultEmailAccount(id);
+    await reloadAccounts();
+  };
+
+  const handleTogglePause = async (acct) => {
+    const next = acct.status === 'paused' ? 'active' : 'paused';
+    await setEmailAccountStatus(acct.id, next);
+    await reloadAccounts();
+  };
+
+  if (loading) {
+    return <div className="h-48 animate-pulse rounded-md bg-border/50" />;
+  }
+
+  const noProviders = !providers.google && !providers.microsoft;
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <div>
+        <h2 className="text-base font-medium">Email accounts</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Connect your Gmail / Microsoft 365 mailboxes so the assistant can triage and draft on your
+          behalf. You can link more than one of each.
+        </p>
+      </div>
+
+      <Banner message={error ? { type: 'error', text: error } : null} />
+
+      {noProviders && (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 text-sm text-yellow-600">
+          Email isn&apos;t set up for this workspace yet. An admin needs to add the firm&apos;s Google
+          and/or Microsoft OAuth app under Settings → Event Handler before mailboxes can be linked.
+        </div>
+      )}
+
+      {/* Connect buttons */}
+      {!noProviders && (
+        <div className="flex flex-wrap gap-2">
+          {providers.google && (
+            <button
+              type="button"
+              onClick={() => handleConnect('google')}
+              disabled={!!connecting}
+              className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium border border-border hover:bg-accent disabled:opacity-50 transition-colors"
+            >
+              {connecting === 'google' ? <SpinnerIcon size={14} className="animate-spin" /> : null}
+              Connect Google
+            </button>
+          )}
+          {providers.microsoft && (
+            <button
+              type="button"
+              onClick={() => handleConnect('microsoft')}
+              disabled={!!connecting}
+              className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium border border-border hover:bg-accent disabled:opacity-50 transition-colors"
+            >
+              {connecting === 'microsoft' ? <SpinnerIcon size={14} className="animate-spin" /> : null}
+              Connect Microsoft
+            </button>
+          )}
+        </div>
+      )}
+
+      {connecting && (
+        <p className="text-xs text-muted-foreground">
+          Complete the sign-in in the popup window. This page updates automatically when you&apos;re done.
+        </p>
+      )}
+
+      {/* Linked accounts */}
+      {accounts.length > 0 && (
+        <div className="rounded-lg border bg-card divide-y divide-border">
+          {accounts.map((a) => (
+            <div key={a.id} className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between p-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">{a.email}</span>
+                  {a.isDefault && (
+                    <span className="text-[10px] uppercase tracking-wide rounded bg-foreground/10 px-1.5 py-0.5 text-muted-foreground">
+                      Default
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                  <span>{PROVIDER_LABEL[a.provider] || a.provider}</span>
+                  <span>·</span>
+                  {a.status === 'reauth_required' ? (
+                    <span className="text-destructive">Reconnect required</span>
+                  ) : a.status === 'paused' ? (
+                    <span className="text-yellow-600">Paused</span>
+                  ) : (
+                    <span className="text-green-600">Active</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
+                {a.status === 'reauth_required' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleConnect(a.provider)}
+                    disabled={!!connecting}
+                    className="rounded-md px-2.5 py-1.5 text-xs font-medium border border-border hover:bg-accent disabled:opacity-50 transition-colors"
+                  >
+                    Reconnect
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleSetDefault(a.id)}
+                      title={a.isDefault ? 'Default account' : 'Make default'}
+                      disabled={a.isDefault}
+                      className="rounded-md p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-60 transition-colors"
+                    >
+                      {a.isDefault ? <StarFilledIcon size={14} /> : <StarIcon size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePause(a)}
+                      className="rounded-md px-2.5 py-1.5 text-xs border border-border text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {a.status === 'paused' ? 'Resume' : 'Pause'}
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleUnlink(a.id)}
+                  title={confirmUnlink === a.id ? 'Click again to confirm' : 'Disconnect'}
+                  className={`rounded-md p-1.5 border transition-colors ${
+                    confirmUnlink === a.id
+                      ? 'border-destructive text-destructive bg-destructive/10'
+                      : 'border-border text-muted-foreground hover:text-destructive hover:border-destructive'
+                  }`}
+                >
+                  <TrashIcon size={12} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin › Event Handler › Google / Microsoft — per-firm OAuth app credentials
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EmailProviderAdmin({ provider }) {
+  const isMs = provider === 'microsoft';
+  const label = PROVIDER_LABEL[provider];
+
+  const [loading, setLoading] = useState(true);
+  const [redirectUri, setRedirectUri] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [clientSecretSet, setClientSecretSet] = useState(false);
+  const [tenantId, setTenantId] = useState('');
+  const [scopes, setScopes] = useState('');
+  const [scopesDefault, setScopesDefault] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await getEmailAppConfig();
+        const p = cfg[provider] || {};
+        setRedirectUri(cfg.redirectUri || '');
+        setClientId(p.clientId || '');
+        setClientSecretSet(!!p.clientSecretSet);
+        setTenantId(p.tenantId || '');
+        setScopes(p.scopes || p.scopesDefault || '');
+        setScopesDefault(p.scopesDefault || '');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [provider]);
+
+  const copyRedirect = () => {
+    navigator.clipboard.writeText(redirectUri);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const prefix = isMs ? 'MS_OAUTH' : 'GOOGLE_OAUTH';
+      const writes = [
+        updateApiKeySetting(`${prefix}_CLIENT_ID`, clientId.trim()),
+        updateApiKeySetting(`${prefix}_SCOPES`, scopes.trim()),
+      ];
+      if (isMs) writes.push(updateApiKeySetting('MS_OAUTH_TENANT_ID', tenantId.trim()));
+      // Only overwrite the secret when the admin actually typed a new one.
+      if (clientSecret.trim()) writes.push(updateApiKeySetting(`${prefix}_CLIENT_SECRET`, clientSecret.trim()));
+
+      const results = await Promise.all(writes);
+      const failed = results.find((r) => r?.error);
+      if (failed) {
+        setMessage({ type: 'error', text: failed.error });
+      } else {
+        if (clientSecret.trim()) setClientSecretSet(true);
+        setClientSecret('');
+        setMessage({ type: 'success', text: `${label} email settings saved.` });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save settings.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="h-48 animate-pulse rounded-md bg-border/50" />;
+
+  return (
+    <div className="max-w-xl space-y-5">
+      <div>
+        <h2 className="text-base font-medium">{label} email</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Paste this firm&apos;s own {label} OAuth app credentials. Users then link their own mailboxes
+          from their profile. Register the app <strong>inside your {isMs ? 'tenant' : 'Workspace org'}</strong>
+          {isMs ? '' : ' with consent screen User Type = Internal'} — that keeps you exempt from Google CASA
+          / app verification.
+        </p>
+      </div>
+
+      <Banner message={message} />
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Redirect URI</label>
+        <div className="flex gap-2">
+          <input type="text" value={redirectUri} readOnly className={`${inputClass} text-muted-foreground bg-muted`} />
+          <button
+            type="button"
+            onClick={copyRedirect}
+            className="rounded-md px-2.5 py-1.5 text-xs border border-border text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            title="Copy"
+          >
+            {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+          </button>
+        </div>
+        <p className="text-xs text-muted-foreground">Add this exact URL as an authorized redirect URI in the {label} app.</p>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Client ID</label>
+        <input type="text" value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputClass} placeholder={`${label} OAuth client ID`} />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium flex items-center gap-2">
+          Client Secret
+          {clientSecretSet && <StatusBadge isSet={true} />}
+        </label>
+        <input
+          type="password"
+          value={clientSecret}
+          onChange={(e) => setClientSecret(e.target.value)}
+          className={inputClass}
+          placeholder={clientSecretSet ? '•••••••• (leave blank to keep current)' : `${label} OAuth client secret`}
+        />
+      </div>
+
+      {isMs && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Directory (Tenant) ID</label>
+          <input type="text" value={tenantId} onChange={(e) => setTenantId(e.target.value)} className={inputClass} placeholder="Single-tenant Directory (Tenant) ID" />
+          <p className="text-xs text-muted-foreground">Required for single-tenant apps (same as the Teams setup).</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Scopes</label>
+        <textarea value={scopes} onChange={(e) => setScopes(e.target.value)} rows={3} className={`${inputClass} font-mono resize-y`} placeholder={scopesDefault} />
+        <p className="text-xs text-muted-foreground">
+          Space-separated. Identity scopes are appended automatically. Requesting a scope your {label} app
+          doesn&apos;t grant will fail at consent.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving || !clientId.trim()}
+        className="rounded-md px-4 py-2 text-sm font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 transition-colors"
+      >
+        {saving ? 'Saving...' : 'Save'}
+      </button>
+    </div>
+  );
+}
+
+export function EventHandlerGooglePage() {
+  return <EmailProviderAdmin provider="google" />;
+}
+
+export function EventHandlerMicrosoftPage() {
+  return <EmailProviderAdmin provider="microsoft" />;
+}

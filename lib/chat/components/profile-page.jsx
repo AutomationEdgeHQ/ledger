@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { PageLayout } from './page-layout.js';
-import { KeyIcon, SendIcon, CopyIcon, CheckIcon, UserIcon, SlackIcon, TeamsIcon } from './icons.js';
+import { KeyIcon, SendIcon, CopyIcon, CheckIcon, UserIcon, SlackIcon, TeamsIcon, MessageIcon } from './icons.js';
 import { updateProfile, updateProfileInfo } from '../../auth/actions.js';
 import {
   startMfaSetup,
@@ -28,6 +28,7 @@ const TABS = [
   { id: 'telegram', label: 'Telegram', href: '/profile/telegram', icon: SendIcon },
   { id: 'slack', label: 'Slack', href: '/profile/slack', icon: SlackIcon },
   { id: 'teams', label: 'Teams', href: '/profile/teams', icon: TeamsIcon },
+  { id: 'email', label: 'Email', href: '/profile/email', icon: MessageIcon },
 ];
 
 export function ProfileLayout({ session, children }) {

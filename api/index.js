@@ -509,6 +509,26 @@ async function handleOAuthCallback(request) {
       redirectUri,
     });
 
+    // Per-user email-account link: resolve the mailbox identity and persist
+    // encrypted tokens into user_email_accounts, attributed to the user packed
+    // into the state. Distinct from the admin agent-secret path below.
+    if (state.secretType === 'email_account') {
+      const { fetchAccountIdentity } = await import('../lib/email/account-identity.js');
+      const { linkAccount } = await import('../lib/db/user-email-accounts.js');
+      const { email, displayName } = await fetchAccountIdentity(state.provider, tokenData.access_token);
+      linkAccount({
+        userId: state.userId,
+        provider: state.provider,
+        email,
+        displayName,
+        refreshToken: tokenData.refresh_token || null,
+        accessToken: tokenData.access_token,
+        accessTokenExpiresAt: tokenData.expires_in ? Date.now() + tokenData.expires_in * 1000 : null,
+        scopes: tokenData.scope || null,
+      });
+      return oauthResultPage(true, email);
+    }
+
     // Save token with typed wrapper so the API can auto-refresh on fetch
     const secretType = state.secretType || 'oauth2';
     let stored;
