@@ -3,6 +3,9 @@ import { auth } from 'thepopebot/auth';
 import { MfaChallengeForm, AsciiLogo } from 'thepopebot/auth/components';
 import { isEmailBackupAvailable } from 'thepopebot/auth/mfa-actions';
 
+// Reads session + SMTP config (DB) at render — never prerender it.
+export const dynamic = 'force-dynamic';
+
 export default async function MfaChallengePage() {
   const session = await auth();
   if (!session?.user) redirect('/login');
