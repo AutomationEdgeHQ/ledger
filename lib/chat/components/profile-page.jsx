@@ -5,6 +5,12 @@ import { PageLayout } from './page-layout.js';
 import { KeyIcon, SendIcon, CopyIcon, CheckIcon, UserIcon } from './icons.js';
 import { updateProfile, updateProfileInfo } from '../../auth/actions.js';
 import {
+  startMfaSetup,
+  confirmMfaSetup,
+  disableOwnMfa,
+  getOwnMfaState,
+} from '../../auth/mfa-actions.js';
+import {
   issueTelegramCode,
   unlinkTelegramChannel,
   setTelegramSystemMessages,
@@ -344,7 +350,228 @@ export function ProfileLoginPage({ session }) {
       <EmailForm session={session} />
       <div className="border-t border-border" />
       <PasswordForm />
+      <div className="border-t border-border" />
+      <MfaSection />
     </div>
+  );
+}
+
+function MfaSection() {
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState('idle');
+  const [setupData, setSetupData] = useState(null);
+  const [confirmCode, setConfirmCode] = useState('');
+  const [disablePassword, setDisablePassword] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const result = await getOwnMfaState();
+      if (!cancelled) {
+        setState(result);
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function refreshState() {
+    const result = await getOwnMfaState();
+    setState(result);
+  }
+
+  async function beginSetup() {
+    setError('');
+    setBusy(true);
+    try {
+      const result = await startMfaSetup();
+      if (result?.error) setError(result.error);
+      else {
+        setSetupData(result);
+        setMode('setup');
+      }
+    } catch {
+      setError('Could not start setup.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function finishSetup(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const result = await confirmMfaSetup(confirmCode);
+      if (result?.error) {
+        setError(result.error);
+      } else {
+        setMessage({ type: 'success', text: 'Two-factor authentication is on. Save your recovery codes somewhere safe.' });
+        setMode('show-recovery');
+        await refreshState();
+      }
+    } catch {
+      setError('Could not enable two-factor.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const result = await disableOwnMfa(disablePassword);
+      if (result?.error) {
+        setError(result.error);
+      } else {
+        setMessage({ type: 'success', text: 'Two-factor authentication is off.' });
+        setMode('idle');
+        setDisablePassword('');
+        await refreshState();
+      }
+    } catch {
+      setError('Could not disable two-factor.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <section>
+        <h2 className="text-lg font-semibold mb-2">Two-factor authentication</h2>
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </section>
+    );
+  }
+
+  const enabled = state?.mfaEnabled;
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold">Two-factor authentication</h2>
+        <p className="text-sm text-muted-foreground">
+          {enabled
+            ? `On since ${new Date(state.mfaSetupAt).toLocaleDateString()}. ${state.recoveryCodesRemaining} recovery code${state.recoveryCodesRemaining === 1 ? '' : 's'} remaining.`
+            : 'Add a second factor to protect your account if your password is stolen.'}
+        </p>
+      </div>
+
+      {message && <FormBanner message={message} />}
+
+      {mode === 'idle' && !enabled && (
+        <button
+          type="button"
+          onClick={beginSetup}
+          disabled={busy}
+          className="inline-flex items-center justify-center px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90 disabled:opacity-50"
+        >
+          {busy ? 'Starting…' : 'Set up two-factor'}
+        </button>
+      )}
+
+      {mode === 'idle' && enabled && (
+        <form onSubmit={disable} className="space-y-3">
+          <p className="text-sm">Disable two-factor on this account?</p>
+          <div className="space-y-1">
+            <label htmlFor="disable-password" className="text-sm font-medium">Current password</label>
+            <input
+              id="disable-password"
+              type="password"
+              autoComplete="current-password"
+              value={disablePassword}
+              onChange={(e) => setDisablePassword(e.target.value)}
+              required
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <button
+            type="submit"
+            disabled={busy || !disablePassword}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-md border border-destructive/40 text-destructive text-sm font-medium hover:bg-destructive/5 disabled:opacity-50"
+          >
+            {busy ? 'Disabling…' : 'Disable two-factor'}
+          </button>
+        </form>
+      )}
+
+      {mode === 'setup' && setupData && (
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm mb-2">1. Scan this QR code with an authenticator app (1Password, Authy, Google Authenticator).</p>
+            {setupData.qrDataUrl && (
+              <img src={setupData.qrDataUrl} alt="MFA QR code" className="border border-border rounded-md" width={192} height={192} />
+            )}
+            <details className="mt-2">
+              <summary className="text-xs text-muted-foreground cursor-pointer">Can't scan? Use this code instead.</summary>
+              <code className="block mt-1 text-xs font-mono break-all bg-muted px-2 py-1 rounded">{setupData.secret}</code>
+            </details>
+          </div>
+          <form onSubmit={finishSetup} className="space-y-2">
+            <label htmlFor="confirm-code" className="text-sm font-medium">2. Enter the 6-digit code from the app</label>
+            <input
+              id="confirm-code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={confirmCode}
+              onChange={(e) => setConfirmCode(e.target.value)}
+              required
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm font-mono tracking-widest"
+              placeholder="123456"
+            />
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={busy || !confirmCode}
+                className="inline-flex items-center justify-center px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90 disabled:opacity-50"
+              >
+                {busy ? 'Verifying…' : 'Turn on two-factor'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('idle'); setSetupData(null); setConfirmCode(''); setError(''); }}
+                className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {mode === 'show-recovery' && setupData?.recoveryCodes && (
+        <div className="space-y-3">
+          <div className="rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3">
+            <p className="text-sm font-medium">Save these recovery codes now.</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Each code can be used once if you lose access to your authenticator. They will not be shown again.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-1 font-mono text-sm bg-muted p-3 rounded-md">
+            {setupData.recoveryCodes.map((code) => (
+              <div key={code}>{code}</div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => { setMode('idle'); setSetupData(null); setConfirmCode(''); }}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90"
+          >
+            I've saved them
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
