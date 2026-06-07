@@ -48,6 +48,8 @@
     "./mfa/rate-limit": "./lib/mfa/rate-limit.js",
     "./mfa/email-code": "./lib/mfa/email-code.js",
     "./email/transport": "./lib/email/transport.js",
+    "./email/providers": "./lib/email/providers/index.js",
+    "./email/tokens": "./lib/email/tokens.js",
     "./db/mfa-email-codes": "./lib/db/mfa-email-codes.js",
     "./db/password-reset-tokens": "./lib/db/password-reset-tokens.js",
     "./package.json": "./package.json"
