@@ -50,6 +50,11 @@
     "./email/transport": "./lib/email/transport.js",
     "./email/providers": "./lib/email/providers/index.js",
     "./email/tokens": "./lib/email/tokens.js",
+    "./email/pipeline": "./lib/email/pipeline.js",
+    "./db/email-messages": "./lib/db/email-messages.js",
+    "./db/email-actions": "./lib/db/email-actions.js",
+    "./db/email-guardrails": "./lib/db/email-guardrails.js",
+    "./db/email-corrections": "./lib/db/email-corrections.js",
     "./db/mfa-email-codes": "./lib/db/mfa-email-codes.js",
     "./db/password-reset-tokens": "./lib/db/password-reset-tokens.js",
     "./package.json": "./package.json"
