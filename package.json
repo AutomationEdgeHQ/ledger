@@ -51,6 +51,7 @@
     "./email/providers": "./lib/email/providers/index.js",
     "./email/tokens": "./lib/email/tokens.js",
     "./email/pipeline": "./lib/email/pipeline.js",
+    "./email/briefing": "./lib/email/briefing.js",
     "./db/email-messages": "./lib/db/email-messages.js",
     "./db/email-actions": "./lib/db/email-actions.js",
     "./db/email-guardrails": "./lib/db/email-guardrails.js",

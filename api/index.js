@@ -598,6 +598,9 @@ async function POST(request) {
     // Trigger errors are non-fatal
   }
 
+  // Email pipeline trigger (called by CRONS.json webhook)
+  // Secured via the same AGENT_API_KEY check in checkAuth above.
+
   // Cluster role webhooks
   const clusterMatch = routePath.match(/^\/cluster\/([a-f0-9-]+)\/role\/([a-f0-9-]+)\/webhook$/);
   if (clusterMatch) {
@@ -613,6 +616,7 @@ async function POST(request) {
     case '/slack/events':       return handleSlackWebhook(request);
     case '/teams/events':       return handleTeamsWebhook(request);
     case '/github/webhook':     return handleGithubWebhook(request);
+    case '/email/pipeline':     return handleEmailPipeline(request);
     default:                    return Response.json({ error: 'Not found' }, { status: 404 });
   }
 }
@@ -633,6 +637,17 @@ async function GET(request) {
     case '/users':              return handleListUsers();
     case '/oauth/callback':     return handleOAuthCallback(request);
     default:                    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
+}
+
+async function handleEmailPipeline(request) {
+  try {
+    const { runPipelineAndBriefAllUsers } = await import('../lib/email/briefing.js');
+    const results = await runPipelineAndBriefAllUsers();
+    return Response.json({ ok: true, results });
+  } catch (err) {
+    console.error('[email/pipeline]', err);
+    return Response.json({ ok: false, error: err.message }, { status: 500 });
   }
 }
 

@@ -415,3 +415,259 @@ export function EventHandlerGooglePage() {
 export function EventHandlerMicrosoftPage() {
   return <EmailProviderAdmin provider="microsoft" />;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Profile › Email › Inbox — classified message feed + reply UI (M4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  runEmailPipeline,
+  getEmailFeed,
+  getEmailMessageBody,
+  sendEmailReply,
+  approveEmailAction,
+  correctEmailMessage,
+} from '../actions.js';
+
+const CATEGORY_COLOR = {
+  'VIP':           'bg-yellow-500/15 text-yellow-600 border-yellow-500/30',
+  'Important':     'bg-blue-500/15 text-blue-600 border-blue-500/30',
+  'Action-needed': 'bg-orange-500/15 text-orange-600 border-orange-500/30',
+  'Sales':         'bg-gray-500/15 text-muted-foreground border-border',
+  'Junk':          'bg-red-500/15 text-red-600 border-red-500/30',
+  'Unsubscribe':   'bg-purple-500/15 text-purple-600 border-purple-500/30',
+  'Other':         'bg-gray-500/15 text-muted-foreground border-border',
+};
+
+const ALL_CATEGORIES = ['VIP','Important','Action-needed','Sales','Junk','Unsubscribe','Other'];
+
+function CategoryBadge({ category, onClick }) {
+  const cls = CATEGORY_COLOR[category] || 'bg-gray-500/15 text-muted-foreground border-border';
+  return (
+    <span
+      onClick={onClick}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls} ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
+    >
+      {category || 'Unclassified'}
+    </span>
+  );
+}
+
+function MessageRow({ msg, onBodyRequest, onReply, onCorrect, onApprove }) {
+  const [expanded, setExpanded] = useState(false);
+  const [body, setBody] = useState(null);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const headers = msg.headers || {};
+  const from = headers.from || '';
+  const fromShort = from.replace(/<[^>]+>/, '').trim() || from;
+  const date = msg.receivedAt ? new Date(msg.receivedAt).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+
+  async function expand() {
+    setExpanded(e => !e);
+    if (!body && !expanded) {
+      const res = await onBodyRequest(msg.id);
+      setBody(res?.body || '(body not available)');
+    }
+  }
+
+  async function handleSend() {
+    if (!replyText.trim()) return;
+    setSending(true); setError(null);
+    const res = await onReply(msg.id, replyText);
+    setSending(false);
+    if (res?.error) { setError(res.error); return; }
+    setDone(true); setReplyOpen(false); setReplyText('');
+  }
+
+  async function handleCorrect(cat) {
+    setCorrecting(false);
+    await onCorrect(msg.id, cat);
+  }
+
+  if (done) return null;
+
+  return (
+    <div className="border-b border-border last:border-0 py-3">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={expand}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium truncate">{fromShort}</span>
+            {msg.classification && <CategoryBadge category={msg.classification} onClick={(e) => { e.stopPropagation(); setCorrecting(c => !c); }} />}
+            <span className="text-xs text-muted-foreground ml-auto shrink-0">{date}</span>
+          </div>
+          <div className="text-sm font-medium mt-0.5">{headers.subject || '(no subject)'}</div>
+          <div className="text-xs text-muted-foreground mt-0.5 truncate">{headers.snippet || ''}</div>
+        </div>
+      </div>
+
+      {/* Category correction dropdown */}
+      {correcting && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          <span className="text-xs text-muted-foreground mr-1 self-center">Correct to:</span>
+          {ALL_CATEGORIES.filter(c => c !== msg.classification).map(cat => (
+            <button key={cat} onClick={() => handleCorrect(cat)}
+              className="text-xs px-2 py-0.5 rounded-full border border-border hover:bg-accent">
+              {cat}
+            </button>
+          ))}
+          <button onClick={() => setCorrecting(false)} className="text-xs px-2 py-0.5 text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+      )}
+
+      {/* Expanded body */}
+      {expanded && (
+        <div className="mt-2 rounded-md bg-muted/50 p-3 text-xs font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
+          {body === null ? 'Loading…' : body}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="mt-2 flex gap-2">
+        <button onClick={() => { setReplyOpen(r => !r); setExpanded(true); if (!body) expand(); }}
+          className="text-xs px-3 py-1 rounded-md border border-border hover:bg-accent">
+          ↩ Reply
+        </button>
+        {error && <span className="text-xs text-destructive">{error}</span>}
+        {msg.status === 'actioned' && (
+          <span className="text-xs text-muted-foreground">{msg.classification === 'VIP' || msg.classification === 'Important' ? '★ Flagged' : '✓ Actioned'}</span>
+        )}
+      </div>
+
+      {/* Inline reply composer */}
+      {replyOpen && (
+        <div className="mt-3 space-y-2">
+          <textarea
+            value={replyText}
+            onChange={e => setReplyText(e.target.value)}
+            placeholder="Type your reply…"
+            rows={4}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={handleSend}
+              disabled={sending || !replyText.trim()}
+              className="text-xs px-4 py-1.5 rounded-md bg-foreground text-background hover:opacity-80 disabled:opacity-50"
+            >
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+            <button onClick={() => setReplyOpen(false)} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function EmailInboxPage() {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [filter, setFilter] = useState('all'); // all | pending | VIP | Important | Action-needed
+  const [banner, setBanner] = useState(null);
+
+  async function loadFeed() {
+    setLoading(true);
+    const status = filter === 'all' || ALL_CATEGORIES.includes(filter) ? undefined : filter;
+    const msgs = await getEmailFeed({ limit: 100, status });
+    const filtered = filter !== 'all' && ALL_CATEGORIES.includes(filter)
+      ? msgs.filter(m => m.classification === filter)
+      : msgs;
+    setMessages(filtered);
+    setLoading(false);
+  }
+
+  useEffect(() => { loadFeed(); }, [filter]);
+
+  async function handleSync() {
+    setSyncing(true); setBanner(null);
+    const res = await runEmailPipeline();
+    setSyncing(false);
+    setLastSync(new Date());
+    if (res?.error) { setBanner({ type: 'error', text: res.error }); return; }
+    const synced = res?.sync?.total ?? 0;
+    const classified = res?.classify?.classified ?? 0;
+    setBanner({ type: 'success', text: `Synced ${synced} new message${synced !== 1 ? 's' : ''}, classified ${classified}.` });
+    loadFeed();
+  }
+
+  const counts = {};
+  messages.forEach(m => { const c = m.classification || 'Other'; counts[c] = (counts[c] || 0) + 1; });
+
+  return (
+    <div className="space-y-4">
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">Inbox</h3>
+          {lastSync && <p className="text-xs text-muted-foreground">Last sync: {lastSync.toLocaleTimeString()}</p>}
+        </div>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="text-xs px-4 py-1.5 rounded-md bg-foreground text-background hover:opacity-80 disabled:opacity-50 flex items-center gap-1.5"
+        >
+          {syncing ? '⟳ Syncing…' : '⟳ Sync Now'}
+        </button>
+      </div>
+
+      {banner && (
+        <div className={`rounded-lg border p-3 text-sm ${banner.type === 'error' ? 'border-destructive/30 bg-destructive/5 text-destructive' : 'border-green-500/30 bg-green-500/5 text-green-500'}`}>
+          {banner.text}
+        </div>
+      )}
+
+      {/* Filter pills */}
+      <div className="flex flex-wrap gap-1.5">
+        {['all','VIP','Important','Action-needed','Sales','Junk'].map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${filter === f ? 'bg-foreground text-background border-foreground' : 'border-border hover:bg-accent'}`}>
+            {f === 'all' ? `All (${messages.length})` : `${f}${counts[f] ? ` (${counts[f]})` : ''}`}
+          </button>
+        ))}
+      </div>
+
+      {/* Message list */}
+      {loading ? (
+        <p className="text-sm text-muted-foreground py-8 text-center">Loading…</p>
+      ) : messages.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-8 text-center">
+          {filter === 'all' ? 'No emails yet — click Sync Now to fetch your inbox.' : `No ${filter} emails.`}
+        </p>
+      ) : (
+        <div>
+          {messages.map(msg => (
+            <MessageRow
+              key={msg.id}
+              msg={msg}
+              onBodyRequest={(id) => getEmailMessageBody(id)}
+              onReply={async (id, body) => {
+                const res = await sendEmailReply({ messageId: id, body });
+                if (!res?.error) { setBanner({ type: 'success', text: 'Reply sent.' }); loadFeed(); }
+                return res;
+              }}
+              onCorrect={async (id, cat) => {
+                await correctEmailMessage({ messageId: id, correctedCategory: cat });
+                loadFeed();
+              }}
+              onApprove={async (actionId) => {
+                const res = await approveEmailAction(actionId);
+                if (!res?.error) loadFeed();
+                return res;
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
