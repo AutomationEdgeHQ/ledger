@@ -617,6 +617,7 @@ async function POST(request) {
     case '/teams/events':       return handleTeamsWebhook(request);
     case '/github/webhook':     return handleGithubWebhook(request);
     case '/email/pipeline':     return handleEmailPipeline(request);
+    case '/email/briefing':     return handleEmailBriefing(request);
     default:                    return Response.json({ error: 'Not found' }, { status: 404 });
   }
 }
@@ -647,6 +648,17 @@ async function handleEmailPipeline(request) {
     return Response.json({ ok: true, results });
   } catch (err) {
     console.error('[email/pipeline]', err);
+    return Response.json({ ok: false, error: err.message }, { status: 500 });
+  }
+}
+
+async function handleEmailBriefing(request) {
+  try {
+    const { sendDailyBriefingForAllUsers } = await import('../lib/email/briefing.js');
+    const results = await sendDailyBriefingForAllUsers();
+    return Response.json({ ok: true, results });
+  } catch (err) {
+    console.error('[email/briefing]', err);
     return Response.json({ ok: false, error: err.message }, { status: 500 });
   }
 }

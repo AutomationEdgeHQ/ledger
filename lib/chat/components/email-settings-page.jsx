@@ -128,6 +128,7 @@ export function ProfileEmailPage() {
 
   return (
     <div className="max-w-xl space-y-6">
+      <EmailSubNav active="accounts" />
       <div>
         <h2 className="text-base font-medium">Email accounts</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -417,6 +418,35 @@ export function EventHandlerMicrosoftPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shared sub-nav for all email sub-pages
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EmailSubNav({ active }) {
+  const links = [
+    { id: 'accounts', label: 'Accounts', href: '/profile/email' },
+    { id: 'inbox',    label: 'Inbox',    href: '/profile/email/inbox' },
+    { id: 'guardrails', label: 'Guardrails', href: '/profile/email/guardrails' },
+  ];
+  return (
+    <div className="flex gap-1 border-b border-border mb-6">
+      {links.map(l => (
+        <a
+          key={l.id}
+          href={l.href}
+          className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            l.id === active
+              ? 'border-foreground text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+          }`}
+        >
+          {l.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Profile › Email › Inbox — classified message feed + reply UI (M4)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -427,6 +457,10 @@ import {
   sendEmailReply,
   approveEmailAction,
   correctEmailMessage,
+  getEmailGuardrails,
+  upsertEmailGuardrail,
+  deleteEmailGuardrail,
+  sendEmailBriefing,
 } from '../actions.js';
 
 const CATEGORY_COLOR = {
@@ -571,6 +605,7 @@ export function EmailInboxPage() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [briefing, setBriefing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [filter, setFilter] = useState('all'); // all | pending | VIP | Important | Action-needed
   const [banner, setBanner] = useState(null);
@@ -600,24 +635,42 @@ export function EmailInboxPage() {
     loadFeed();
   }
 
+  async function handleSendBriefing() {
+    setBriefing(true); setBanner(null);
+    const res = await sendEmailBriefing();
+    setBriefing(false);
+    if (res?.error) { setBanner({ type: 'error', text: res.error }); return; }
+    setBanner({ type: 'success', text: 'Briefing sent to your email.' });
+  }
+
   const counts = {};
   messages.forEach(m => { const c = m.classification || 'Other'; counts[c] = (counts[c] || 0) + 1; });
 
   return (
     <div className="space-y-4">
+      <EmailSubNav active="inbox" />
       {/* Header row */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap gap-y-2">
         <div>
           <h3 className="text-sm font-semibold">Inbox</h3>
           {lastSync && <p className="text-xs text-muted-foreground">Last sync: {lastSync.toLocaleTimeString()}</p>}
         </div>
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="text-xs px-4 py-1.5 rounded-md bg-foreground text-background hover:opacity-80 disabled:opacity-50 flex items-center gap-1.5"
-        >
-          {syncing ? '⟳ Syncing…' : '⟳ Sync Now'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleSendBriefing}
+            disabled={briefing || syncing}
+            className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent disabled:opacity-50"
+          >
+            {briefing ? '✉ Sending…' : '✉ Send briefing'}
+          </button>
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="text-xs px-4 py-1.5 rounded-md bg-foreground text-background hover:opacity-80 disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {syncing ? '⟳ Syncing…' : '⟳ Sync Now'}
+          </button>
+        </div>
       </div>
 
       {banner && (
@@ -668,6 +721,261 @@ export function EmailInboxPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Profile › Email › Guardrails — per-category automation control
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CATEGORIES = ['VIP', 'Important', 'Action-needed', 'Sales', 'Junk', 'Unsubscribe', 'Other'];
+
+const CATEGORY_ACTION_LABEL = {
+  'VIP':           'mark important',
+  'Important':     'mark important',
+  'Action-needed': 'draft reply',
+  'Sales':         'archive',
+  'Junk':          'trash',
+  'Unsubscribe':   'flag for review',
+  'Other':         'archive',
+};
+
+const MODE_OPTIONS = [
+  { value: 'shadow',       label: 'Observe only',       desc: 'Records what it would do — never touches your inbox.' },
+  { value: 'manual',       label: 'Approve first',       desc: 'Creates a draft or queues the action; you approve before anything happens.' },
+  { value: 'pending_auto', label: 'Act with undo window', desc: 'Executes automatically after a short delay you can cancel.' },
+  { value: 'off',          label: 'Skip',                desc: 'Ignores this category entirely.' },
+];
+
+const UNDO_OPTIONS = [
+  { value: 30,  label: '30 sec' },
+  { value: 60,  label: '1 min' },
+  { value: 120, label: '2 min' },
+  { value: 300, label: '5 min' },
+];
+
+const SYSTEM_DEFAULT = { mode: 'shadow', confidenceThreshold: 80, undoWindowSec: 60 };
+
+function modeLabel(mode) {
+  return MODE_OPTIONS.find(m => m.value === mode)?.label ?? mode;
+}
+
+function GuardrailRow({ scope, scopeValue, label, rule, systemDefault, onSave, onDelete }) {
+  const effective = rule ?? systemDefault;
+  const [mode, setMode] = useState(effective.mode);
+  const [threshold, setThreshold] = useState(effective.confidenceThreshold ?? 80);
+  const [undoSec, setUndoSec] = useState(effective.undoWindowSec ?? 60);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const isDefault = !rule;
+  const dirty = mode !== effective.mode || threshold !== (effective.confidenceThreshold ?? 80) || undoSec !== (effective.undoWindowSec ?? 60);
+
+  async function handleSave() {
+    setSaving(true);
+    await onSave({ scope, scopeValue, mode, confidenceThreshold: threshold, undoWindowSec: undoSec });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  async function handleDelete() {
+    if (!rule) return;
+    await onDelete(rule.id);
+  }
+
+  return (
+    <div className="py-4 border-b border-border last:border-0">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{label}</span>
+            {isDefault && (
+              <span className="text-[10px] uppercase tracking-wide rounded bg-foreground/10 px-1.5 py-0.5 text-muted-foreground">
+                using default
+              </span>
+            )}
+          </div>
+          {scope === 'category' && (
+            <p className="text-xs text-muted-foreground mt-0.5">Agent action: {CATEGORY_ACTION_LABEL[scopeValue] || 'archive'}</p>
+          )}
+          {scope === 'global' && (
+            <p className="text-xs text-muted-foreground mt-0.5">Applies to all categories unless overridden below</p>
+          )}
+        </div>
+        {!isDefault && (
+          <button
+            type="button"
+            onClick={handleDelete}
+            title="Reset to default"
+            className="shrink-0 rounded-md p-1.5 border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition-colors"
+          >
+            <TrashIcon size={12} />
+          </button>
+        )}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+        {/* Mode */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Mode</label>
+          <select
+            value={mode}
+            onChange={e => setMode(e.target.value)}
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
+          >
+            {MODE_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">{MODE_OPTIONS.find(o => o.value === mode)?.desc}</p>
+        </div>
+
+        {/* Confidence threshold */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Min. confidence: {threshold}%</label>
+          <input
+            type="range"
+            min={50} max={99} step={5}
+            value={threshold}
+            onChange={e => setThreshold(Number(e.target.value))}
+            className="w-full accent-foreground"
+          />
+          <p className="text-xs text-muted-foreground">Lower = act on more messages; higher = only act when very sure.</p>
+        </div>
+
+        {/* Undo window (only relevant for pending_auto) */}
+        <div className="space-y-1">
+          <label className={`text-xs font-medium ${mode === 'pending_auto' ? 'text-muted-foreground' : 'text-muted-foreground/40'}`}>
+            Undo window
+          </label>
+          <select
+            value={undoSec}
+            onChange={e => setUndoSec(Number(e.target.value))}
+            disabled={mode !== 'pending_auto'}
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground disabled:opacity-40"
+          >
+            {UNDO_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <p className={`text-xs ${mode === 'pending_auto' ? 'text-muted-foreground' : 'text-muted-foreground/40'}`}>
+            How long you have to cancel before the action executes.
+          </p>
+        </div>
+      </div>
+
+      {dirty && (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="text-xs px-4 py-1.5 rounded-md bg-foreground text-background hover:opacity-80 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+          </button>
+        </div>
+      )}
+      {!dirty && saved && (
+        <p className="mt-2 text-xs text-green-600">Saved ✓</p>
+      )}
+    </div>
+  );
+}
+
+export function EmailGuardrailsPage() {
+  const [rules, setRules] = useState(null); // null = loading
+  const [banner, setBanner] = useState(null);
+
+  async function loadRules() {
+    const data = await getEmailGuardrails();
+    setRules(Array.isArray(data) ? data : []);
+  }
+
+  useEffect(() => { loadRules(); }, []);
+
+  async function handleSave({ scope, scopeValue, mode, confidenceThreshold, undoWindowSec }) {
+    const res = await upsertEmailGuardrail({ scope, scopeValue, mode, confidenceThreshold, undoWindowSec });
+    if (res?.error) {
+      setBanner({ type: 'error', text: res.error });
+    } else {
+      await loadRules();
+    }
+  }
+
+  async function handleDelete(id) {
+    const res = await deleteEmailGuardrail(id);
+    if (res?.error) {
+      setBanner({ type: 'error', text: res.error });
+    } else {
+      await loadRules();
+    }
+  }
+
+  if (rules === null) {
+    return <div className="h-48 animate-pulse rounded-md bg-border/50" />;
+  }
+
+  const byKey = {};
+  for (const r of rules) {
+    byKey[`${r.scope}:${r.scopeValue ?? ''}`] = r;
+  }
+  const globalRule = byKey['global:'] ?? null;
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <EmailSubNav active="guardrails" />
+      <div>
+        <h2 className="text-base font-medium">Email guardrails</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Control how autonomously the assistant handles each type of email. Start with{' '}
+          <strong>Observe only</strong> to build confidence, then graduate to{' '}
+          <strong>Act with undo window</strong> for categories you trust.
+        </p>
+      </div>
+
+      {banner && (
+        <div className={`rounded-lg border p-3 text-sm ${banner.type === 'error' ? 'border-destructive/30 bg-destructive/5 text-destructive' : 'border-green-500/30 bg-green-500/5 text-green-500'}`}>
+          {banner.text}
+        </div>
+      )}
+
+      {/* Global default */}
+      <div className="rounded-lg border bg-card px-4">
+        <GuardrailRow
+          scope="global"
+          scopeValue={null}
+          label="Global default"
+          rule={globalRule}
+          systemDefault={SYSTEM_DEFAULT}
+          onSave={handleSave}
+          onDelete={handleDelete}
+        />
+      </div>
+
+      {/* Per-category overrides */}
+      <div>
+        <h3 className="text-sm font-medium mb-3">Per-category overrides</h3>
+        <p className="text-xs text-muted-foreground mb-4">
+          Leave a category on <em>using default</em> to inherit the global setting. Set a per-category mode to override it for that specific type.
+        </p>
+        <div className="rounded-lg border bg-card px-4">
+          {CATEGORIES.map(cat => (
+            <GuardrailRow
+              key={cat}
+              scope="category"
+              scopeValue={cat}
+              label={cat}
+              rule={byKey[`category:${cat}`] ?? null}
+              systemDefault={globalRule ?? SYSTEM_DEFAULT}
+              onSave={handleSave}
+              onDelete={handleDelete}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
